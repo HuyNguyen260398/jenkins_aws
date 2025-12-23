@@ -1,0 +1,425 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFormation Stack to Deploy Jenkins on AWS EKS in ap-southeast-1'
+
+Parameters:
+  ClusterName:
+    Type: String
+    Default: jenkins-eks-cluster
+    Description: Name of the EKS Cluster
+  
+  NodeGroupName:
+    Type: String
+    Default: jenkins-node-group
+    Description: Name of the Node Group
+  
+  DesiredNodeCapacity:
+    Type: Number
+    Default: 2
+    Description: Number of nodes in the node group
+  
+  NodeInstanceType:
+    Type: String
+    Default: t3.medium
+    Description: EC2 instance type for nodes
+  
+  VpcCIDR:
+    Type: String
+    Default: 10.0.0.0/16
+    Description: VPC CIDR block
+
+Resources:
+  # VPC
+  JenkinsVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: jenkins-vpc
+
+  # Public Subnets
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref JenkinsVPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: ap-southeast-1a
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: jenkins-public-subnet-1
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref JenkinsVPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: ap-southeast-1b
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: jenkins-public-subnet-2
+
+  # Private Subnets
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref JenkinsVPC
+      CidrBlock: 10.0.11.0/24
+      AvailabilityZone: ap-southeast-1a
+      Tags:
+        - Key: Name
+          Value: jenkins-private-subnet-1
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref JenkinsVPC
+      CidrBlock: 10.0.12.0/24
+      AvailabilityZone: ap-southeast-1b
+      Tags:
+        - Key: Name
+          Value: jenkins-private-subnet-2
+
+  # Internet Gateway
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: jenkins-igw
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref JenkinsVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # Elastic IPs for NAT Gateways
+  NATGatewayEIP1:
+    Type: AWS::EC2::EIP
+    DependsOn: AttachGateway
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: jenkins-nat-eip-1
+
+  NATGatewayEIP2:
+    Type: AWS::EC2::EIP
+    DependsOn: AttachGateway
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: jenkins-nat-eip-2
+
+  # NAT Gateways
+  NATGateway1:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NATGatewayEIP1.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: jenkins-nat-gateway-1
+
+  NATGateway2:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NATGatewayEIP2.AllocationId
+      SubnetId: !Ref PublicSubnet2
+      Tags:
+        - Key: Name
+          Value: jenkins-nat-gateway-2
+
+  # Public Route Table
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref JenkinsVPC
+      Tags:
+        - Key: Name
+          Value: jenkins-public-rt
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  # Private Route Tables
+  PrivateRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref JenkinsVPC
+      Tags:
+        - Key: Name
+          Value: jenkins-private-rt-1
+
+  PrivateRoute1:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NATGateway1
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable1
+
+  PrivateRouteTable2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref JenkinsVPC
+      Tags:
+        - Key: Name
+          Value: jenkins-private-rt-2
+
+  PrivateRoute2:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable2
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NATGateway2
+
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable2
+
+  # Security Group for EKS Cluster
+  EKSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for EKS cluster
+      VpcId: !Ref JenkinsVPC
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: jenkins-eks-sg
+
+  # Security Group for Worker Nodes
+  WorkerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for worker nodes
+      VpcId: !Ref JenkinsVPC
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: jenkins-worker-sg
+
+  # Allow worker nodes to communicate with cluster
+  WorkerIngressFromCluster:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref WorkerSecurityGroup
+      IpProtocol: tcp
+      FromPort: 0
+      ToPort: 65535
+      SourceSecurityGroupId: !Ref EKSSecurityGroup
+
+  # Allow worker nodes to communicate with each other
+  WorkerIngressFromWorkers:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref WorkerSecurityGroup
+      IpProtocol: tcp
+      FromPort: 0
+      ToPort: 65535
+      SourceSecurityGroupId: !Ref WorkerSecurityGroup
+
+  # Allow cluster security group to ingress from worker nodes
+  ClusterIngressFromWorkers:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref EKSSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref WorkerSecurityGroup
+
+  # Allow external access to cluster API
+  ClusterIngressPublic:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref EKSSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      CidrIp: 0.0.0.0/0
+
+  # Security Group for LoadBalancer
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Jenkins LoadBalancer
+      VpcId: !Ref JenkinsVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: jenkins-lb-sg
+
+  # IAM Role for EKS Cluster
+  EKSClusterRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: eks.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+      Tags:
+        - Key: Name
+          Value: jenkins-eks-cluster-role
+
+  # IAM Role for Worker Nodes
+  WorkerNodeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+        - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+      Tags:
+        - Key: Name
+          Value: jenkins-worker-node-role
+
+  WorkerNodeInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref WorkerNodeRole
+
+  # EKS Cluster
+  JenkinsEKSCluster:
+    Type: AWS::EKS::Cluster
+    Properties:
+      Name: !Ref ClusterName
+      Version: '1.28'
+      RoleArn: !GetAtt EKSClusterRole.Arn
+      ResourcesVpcConfig:
+        SubnetIds:
+          - !Ref PublicSubnet1
+          - !Ref PublicSubnet2
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+        SecurityGroupIds:
+          - !Ref EKSSecurityGroup
+        EndpointPublicAccess: true
+        EndpointPrivateAccess: false
+      Tags:
+        - Key: Name
+          Value: !Ref ClusterName
+
+  # Node Group using managed node group
+  JenkinsNodeGroup:
+    Type: AWS::EKS::NodeGroup
+    DependsOn: JenkinsEKSCluster
+    Properties:
+      ClusterName: !Ref ClusterName
+      NodeGroupName: !Ref NodeGroupName
+      NodeRole: !GetAtt WorkerNodeRole.Arn
+      Subnets:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      ScalingConfig:
+        MinSize: 1
+        MaxSize: 4
+        DesiredSize: !Ref DesiredNodeCapacity
+      InstanceTypes:
+        - !Ref NodeInstanceType
+      Tags:
+        - Key: Name
+          Value: !Ref NodeGroupName
+        - Key: kubernetes.io/cluster/!Ref ClusterName
+          Value: owned
+
+Outputs:
+  ClusterName:
+    Description: EKS Cluster Name
+    Value: !Ref JenkinsEKSCluster
+    Export:
+      Name: !Sub '${AWS::StackName}-ClusterName'
+
+  ClusterArn:
+    Description: EKS Cluster ARN
+    Value: !GetAtt JenkinsEKSCluster.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ClusterArn'
+
+  ClusterEndpoint:
+    Description: EKS Cluster Endpoint
+    Value: !GetAtt JenkinsEKSCluster.Endpoint
+    Export:
+      Name: !Sub '${AWS::StackName}-ClusterEndpoint'
+
+  NodeGroupName:
+    Description: Node Group Name
+    Value: !Ref JenkinsNodeGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-NodeGroupName'
+
+  VpcId:
+    Description: VPC ID
+    Value: !Ref JenkinsVPC
+    Export:
+      Name: !Sub '${AWS::StackName}-VpcId'
+
+  WorkerSecurityGroupId:
+    Description: Worker Node Security Group ID
+    Value: !Ref WorkerSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-WorkerSecurityGroupId'
+
+  LoadBalancerSecurityGroupId:
+    Description: LoadBalancer Security Group ID
+    Value: !Ref LoadBalancerSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-LoadBalancerSecurityGroupId'
